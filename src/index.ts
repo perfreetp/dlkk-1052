@@ -284,9 +284,16 @@ program
   .argument('<configFile>', '批量任务配置文件 (JSON)')
   .option('--continue-on-failure', '某步失败后继续后续步骤')
   .option('--dry-run', '预览各步骤执行，不实际修改文件')
+  .option('--resume <batchId>', '按批次 ID 从失败步骤继续执行')
+  .option('--from-step <number>', '从指定步骤编号开始（从 0 开始）')
   .action(async (configFile: string, options: any) => {
     try {
-      await batchCommand(configFile, { continueOnFailure: options.continueOnFailure, dryRun: options.dryRun });
+      await batchCommand(configFile, {
+        continueOnFailure: options.continueOnFailure,
+        dryRun: options.dryRun,
+        resume: options.resume,
+        fromStep: options.fromStep !== undefined ? parseInt(options.fromStep, 10) : undefined,
+      });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);
       process.exit(1);

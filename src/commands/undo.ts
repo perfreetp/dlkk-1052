@@ -221,6 +221,17 @@ async function performUndo(record: UndoRecord, dryRun: boolean): Promise<void> {
   });
 
   if (failCount === 0) {
+    if (record.batchId) {
+      const allRecords = listUndoRecords();
+      for (const r of allRecords) {
+        if (r.batchId === record.batchId && r.id !== record.id) {
+          try {
+            removeUndoRecord(r.id);
+            printSuccess(`Cleaned up step undo record: ${r.id}`);
+          } catch {}
+        }
+      }
+    }
     removeUndoRecord(record.id);
     printSuccess(`Undo record ${record.id} removed.`);
   } else {

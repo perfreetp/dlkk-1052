@@ -1,7 +1,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { isDicomFile, parseDicomFile } from '../core/parser';
-import { DicomFileInfo, ValidateRule } from '../core/types';
+import { DicomFileInfo, ValidateRule, ProcessResult } from '../core/types';
 import { getValidateRules } from '../core/config';
 import { writeLog } from '../core/logger';
 import { createProgressBar, printSuccess, printError, printWarning, printReport, printHeader, printSection } from '../utils/display';
@@ -133,7 +133,7 @@ function collectFiles(dir: string): string[] {
   return files;
 }
 
-export async function validateCommand(dir: string, options: { strict?: boolean; rules?: string }): Promise<void> {
+export async function validateCommand(dir: string, options: { strict?: boolean; rules?: string }): Promise<ProcessResult> {
   const startTime = Date.now();
   const resolvedDir = path.resolve(dir);
 
@@ -145,13 +145,35 @@ export async function validateCommand(dir: string, options: { strict?: boolean; 
   const allFiles = collectFiles(resolvedDir);
   if (allFiles.length === 0) {
     printWarning('No files found in directory');
-    return;
+    const emptyResult: ProcessResult = {
+      success: false,
+      totalProcessed: 0,
+      successCount: 0,
+      failCount: 0,
+      failures: [],
+      duration: Date.now() - startTime,
+      timestamp: new Date().toISOString(),
+      command: 'validate',
+    };
+    writeLog('validate', emptyResult);
+    return emptyResult;
   }
 
   const dicomFiles = allFiles.filter(f => isDicomFile(f));
   if (dicomFiles.length === 0) {
     printWarning('No DICOM files found');
-    return;
+    const emptyResult: ProcessResult = {
+      success: false,
+      totalProcessed: 0,
+      successCount: 0,
+      failCount: 0,
+      failures: [],
+      duration: Date.now() - startTime,
+      timestamp: new Date().toISOString(),
+      command: 'validate',
+    };
+    writeLog('validate', emptyResult);
+    return emptyResult;
   }
 
   printSection(`Scanning ${dicomFiles.length} DICOM files`);
@@ -253,4 +275,5 @@ export async function validateCommand(dir: string, options: { strict?: boolean; 
 
   printReport(processResult);
   writeLog('validate', processResult);
+  return processResult;
 }

@@ -1,7 +1,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { isDicomFile, parseDicomFile } from '../core/parser';
-import { DicomFileInfo } from '../core/types';
+import { DicomFileInfo, ProcessResult } from '../core/types';
 import { writeLog } from '../core/logger';
 import { createProgressBar, printSuccess, printError, printReport, printHeader } from '../utils/display';
 
@@ -53,7 +53,7 @@ function toCsv(records: Record<string, string>[], fields: string[]): string {
 export async function exportCommand(
   dir: string,
   options: { format?: 'csv' | 'json'; output?: string; fields?: string }
-): Promise<void> {
+): Promise<ProcessResult> {
   const startTime = Date.now();
   const format = options.format ?? 'csv';
   const fields = options.fields
@@ -67,14 +67,25 @@ export async function exportCommand(
 
   if (!fs.existsSync(dir)) {
     printError(`Directory not found: ${dir}`);
-    return;
+    const errResult: ProcessResult = {
+      success: false, totalProcessed: 0, successCount: 0, failCount: 0,
+      failures: [{ filePath: dir, error: 'Directory not found' }],
+      duration: Date.now() - startTime, timestamp: new Date().toISOString(), command: 'export',
+    };
+    writeLog('export', errResult);
+    return errResult;
   }
 
   const allFiles = walkDir(dir);
 
   if (allFiles.length === 0) {
     printError('No files found in directory');
-    return;
+    const emptyResult: ProcessResult = {
+      success: false, totalProcessed: 0, successCount: 0, failCount: 0,
+      failures: [], duration: Date.now() - startTime, timestamp: new Date().toISOString(), command: 'export',
+    };
+    writeLog('export', emptyResult);
+    return emptyResult;
   }
 
   const bar = createProgressBar(allFiles.length, 'Scanning');
@@ -119,17 +130,12 @@ export async function exportCommand(
 
   if (records.length === 0) {
     printError('No DICOM files found to export');
-    writeLog('export', {
-      success: false,
-      totalProcessed: allFiles.length,
-      successCount: 0,
-      failCount,
-      failures,
-      duration: Date.now() - startTime,
-      timestamp: new Date().toISOString(),
-      command: 'export',
-    });
-    return;
+    const noDataResult: ProcessResult = {
+      success: false, totalProcessed: allFiles.length, successCount: 0, failCount,
+      failures, duration: Date.now() - startTime, timestamp: new Date().toISOString(), command: 'export',
+    };
+    writeLog('export', noDataResult);
+    return noDataResult;
   }
 
   const resolvedOutput = path.resolve(outputPath);
@@ -161,4 +167,15 @@ export async function exportCommand(
     timestamp: new Date().toISOString(),
     command: 'export',
   });
+
+  return {
+    success: true,
+    totalProcessed: allFiles.length,
+    successCount,
+    failCount,
+    failures,
+    duration: Date.now() - startTime,
+    timestamp: new Date().toISOString(),
+    command: 'export',
+  };
 }

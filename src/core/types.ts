@@ -130,6 +130,8 @@ export interface BatchStepResult {
   success: boolean;
   result?: ProcessResult;
   error?: string;
+  workDir?: string;
+  outputDir?: string;
 }
 
 export interface BatchResult {
