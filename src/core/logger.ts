@@ -1,6 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { ProcessResult, UndoRecord } from './types';
+import { ProcessResult, UndoRecord, BatchResult } from './types';
 import { loadConfig } from './config';
 
 export function ensureLogDir(): string {
@@ -20,8 +20,17 @@ export function ensureUndoDir(): string {
 export function writeLog(command: string, result: ProcessResult): void {
   const logDir = ensureLogDir();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const logFile = path.join(logDir, `${timestamp}_${command}.json`);
+  let prefix = result.batchId
+    ? `${result.batchId}_${String(result.stepIndex ?? 0).padStart(2, '0')}_${command}`
+    : `${timestamp}_${command}`;
+  const logFile = path.join(logDir, `${prefix}.json`);
   fs.writeJsonSync(logFile, { command, result }, { spaces: 2 });
+}
+
+export function writeBatchLog(batchResult: BatchResult): void {
+  const logDir = ensureLogDir();
+  const logFile = path.join(logDir, `BATCH_${batchResult.batchId}.json`);
+  fs.writeJsonSync(logFile, { command: 'batch', batchResult }, { spaces: 2 });
 }
 
 export function getLogFiles(): string[] {
@@ -32,6 +41,36 @@ export function getLogFiles(): string[] {
     .sort()
     .reverse()
     .map(f => path.join(logDir, f));
+}
+
+export function getBatchLogFiles(): string[] {
+  const logDir = ensureLogDir();
+  if (!fs.existsSync(logDir)) return [];
+  return fs.readdirSync(logDir)
+    .filter(f => f.startsWith('BATCH_') && f.endsWith('.json'))
+    .sort()
+    .reverse()
+    .map(f => path.join(logDir, f));
+}
+
+export function getBatchStepLogs(batchId: string): string[] {
+  const logDir = ensureLogDir();
+  if (!fs.existsSync(logDir)) return [];
+  return fs.readdirSync(logDir)
+    .filter(f => f.startsWith(`${batchId}_`) && f.endsWith('.json'))
+    .sort()
+    .map(f => path.join(logDir, f));
+}
+
+export function findBatchById(batchId: string): any | null {
+  const batchLogs = getBatchLogFiles();
+  for (const f of batchLogs) {
+    try {
+      const data = fs.readJsonSync(f);
+      if (data.batchResult && data.batchResult.batchId === batchId) return data;
+    } catch {}
+  }
+  return null;
 }
 
 export function readLog(filePath: string): any {

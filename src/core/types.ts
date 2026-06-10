@@ -90,18 +90,59 @@ export interface ProcessResult {
   duration: number;
   timestamp: string;
   command: string;
+  batchId?: string;
+  stepIndex?: number;
+  stepName?: string;
 }
 
 export interface UndoRecord {
   id: string;
   timestamp: string;
   command: string;
+  batchId?: string;
   operations: {
     type: 'rename' | 'copy' | 'modify' | 'delete';
     from: string;
     to: string;
     backupPath?: string;
   }[];
+}
+
+export interface BatchStepConfig {
+  name: 'scan' | 'validate' | 'anonymize' | 'rename' | 'preview' | 'export';
+  enabled?: boolean;
+  options?: Record<string, any>;
+  continueOnFailure?: boolean;
+}
+
+export interface BatchConfig {
+  name?: string;
+  inputDir: string;
+  steps: BatchStepConfig[];
+  continueOnFailure?: boolean;
+}
+
+export interface BatchStepResult {
+  name: string;
+  stepIndex: number;
+  startedAt: string;
+  finishedAt: string;
+  success: boolean;
+  result?: ProcessResult;
+  error?: string;
+}
+
+export interface BatchResult {
+  batchId: string;
+  name: string;
+  timestamp: string;
+  inputDir: string;
+  totalSteps: number;
+  completedSteps: number;
+  failedAtStep: number | null;
+  overallSuccess: boolean;
+  steps: BatchStepResult[];
+  duration: number;
 }
 
 export interface AppConfig {

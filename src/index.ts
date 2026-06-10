@@ -16,6 +16,7 @@ import { copyCommand } from './commands/copy';
 import { undoCommand } from './commands/undo';
 import { logCommand } from './commands/log';
 import { configCommand } from './commands/config';
+import { batchCommand } from './commands/batch';
 
 const program = new Command();
 
@@ -136,17 +137,21 @@ program
 
 program
   .command('preview')
-  .description('导出 DICOM 文件缩略图（BMP 格式）')
+  .description('导出 DICOM 文件缩略图（BMP 格式）及索引清单')
   .argument('<dir>', '目标目录')
   .option('-o, --output <dir>', '输出目录')
   .option('--width <pixels>', '缩略图宽度', '256')
   .option('--height <pixels>', '缩略图高度', '256')
+  .option('--index-format <format>', '索引清单格式: json 或 csv', 'json')
+  .option('--no-index', '不生成缩略图索引清单')
   .action(async (dir: string, options: any) => {
     try {
       await previewCommand(dir, {
         output: options.output,
         width: parseInt(options.width, 10),
         height: parseInt(options.height, 10),
+        indexFormat: options.indexFormat,
+        noIndex: options.index === false,
       });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);
@@ -231,9 +236,10 @@ program
   .description('回滚上次处理操作')
   .option('--list', '查看所有可回滚记录')
   .option('--id <id>', '回滚指定记录')
+  .option('--dry-run', '预览将要还原/删除的文件，再确认执行')
   .action(async (options: any) => {
     try {
-      await undoCommand({ list: options.list, id: options.id });
+      await undoCommand({ list: options.list, id: options.id, dryRun: options.dryRun });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);
       process.exit(1);
@@ -246,9 +252,10 @@ program
   .option('-n, --limit <number>', '显示条数', '10')
   .option('-c, --command <name>', '按命令名称筛选')
   .option('-d, --detail', '显示详细信息')
+  .option('--batch-id <id>', '按批量任务 ID 查看整条链路')
   .action(async (options: any) => {
     try {
-      await logCommand({ limit: parseInt(options.limit, 10), command: options.command, detail: options.detail });
+      await logCommand({ limit: parseInt(options.limit, 10), command: options.command, detail: options.detail, batchId: options.batchId });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);
       process.exit(1);
@@ -265,6 +272,21 @@ program
   .action(async (action: string, options: any) => {
     try {
       await configCommand(action, { key: options.key, value: options.value, file: options.file });
+    } catch (err: any) {
+      console.error(`错误: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('batch')
+  .description('按配置文件批量执行 scan/validate/anonymize/rename/preview/export')
+  .argument('<configFile>', '批量任务配置文件 (JSON)')
+  .option('--continue-on-failure', '某步失败后继续后续步骤')
+  .option('--dry-run', '预览各步骤执行，不实际修改文件')
+  .action(async (configFile: string, options: any) => {
+    try {
+      await batchCommand(configFile, { continueOnFailure: options.continueOnFailure, dryRun: options.dryRun });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);
       process.exit(1);

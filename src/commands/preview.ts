@@ -1,10 +1,24 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { isDicomFile, parseDicomFile, getPixelData, getImageDimensions, getWindowSettings } from '../core/parser';
 import { ProcessResult } from '../core/types';
 import { loadConfig } from '../core/config';
 import { writeLog } from '../core/logger';
 import { createProgressBar, printSuccess, printError, printReport, printHeader } from '../utils/display';
+
+interface IndexRecord {
+  sourceDicomPath: string;
+  thumbnailPath: string | null;
+  patientId: string;
+  accessionNumber: string;
+  seriesNumber: string;
+  instanceNumber: string;
+  studyDate: string;
+  modality: string;
+  success: boolean;
+  error: string | null;
+}
 
 function walkDir(dir: string): string[] {
   const files: string[] = [];
@@ -133,15 +147,25 @@ function writeBmp(filePath: string, width: number, height: number, values: numbe
   fs.writeFileSync(filePath, buf);
 }
 
+function escapeCsvField(field: string | number | boolean | null): string {
+  const str = field === null ? '' : String(field);
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
 export async function previewCommand(
   dir: string,
-  options: { output?: string; width?: number; height?: number }
+  options: { output?: string; width?: number; height?: number; indexFormat?: 'json' | 'csv'; noIndex?: boolean }
 ): Promise<ProcessResult> {
   const startTime = Date.now();
   const config = loadConfig();
   const thumbWidth = options.width ?? config.previewSize.width;
   const thumbHeight = options.height ?? config.previewSize.height;
   const outputDir = options.output ?? path.join(dir, 'previews');
+  const indexFormat = options.indexFormat ?? 'json';
+  const noIndex = options.noIndex ?? false;
 
   const result: ProcessResult = {
     success: true,
@@ -186,10 +210,14 @@ export async function previewCommand(
 
   const bar = createProgressBar(dicomFiles.length, 'Generating previews');
   const usedNames = new Map<string, number>();
+  const indexRecords: IndexRecord[] = [];
 
   for (const filePath of dicomFiles) {
+    const absSourcePath = path.resolve(filePath);
+    let fileInfo: any = null;
+
     try {
-      const fileInfo = parseDicomFile(filePath);
+      fileInfo = parseDicomFile(filePath);
       const pixelBuffer = getPixelData(filePath);
       const dimensions = getImageDimensions(filePath);
 
@@ -198,6 +226,18 @@ export async function previewCommand(
         const msg = 'No image pixel data or dimensions available';
         result.failures.push({ filePath, error: msg });
         printError(`${path.basename(filePath)}: ${msg}`);
+        indexRecords.push({
+          sourceDicomPath: absSourcePath,
+          thumbnailPath: null,
+          patientId: fileInfo?.patientId || '',
+          accessionNumber: fileInfo?.accessionNumber || '',
+          seriesNumber: fileInfo?.seriesNumber || '',
+          instanceNumber: fileInfo?.instanceNumber || '',
+          studyDate: fileInfo?.studyDate || '',
+          modality: fileInfo?.modality || '',
+          success: false,
+          error: msg,
+        });
         bar.increment();
         continue;
       }
@@ -232,10 +272,35 @@ export async function previewCommand(
 
       result.successCount++;
       printSuccess(`Generated: ${outputName}`);
+      indexRecords.push({
+        sourceDicomPath: absSourcePath,
+        thumbnailPath: path.resolve(outputPath),
+        patientId: fileInfo.patientId || '',
+        accessionNumber: fileInfo.accessionNumber || '',
+        seriesNumber: fileInfo.seriesNumber || '',
+        instanceNumber: fileInfo.instanceNumber || '',
+        studyDate: fileInfo.studyDate || '',
+        modality: fileInfo.modality || '',
+        success: true,
+        error: null,
+      });
     } catch (err: any) {
       result.failCount++;
-      result.failures.push({ filePath, error: err.message || 'Unknown error' });
-      printError(`Failed: ${path.basename(filePath)} - ${err.message || 'Unknown error'}`);
+      const errMsg = err.message || 'Unknown error';
+      result.failures.push({ filePath, error: errMsg });
+      printError(`Failed: ${path.basename(filePath)} - ${errMsg}`);
+      indexRecords.push({
+        sourceDicomPath: absSourcePath,
+        thumbnailPath: null,
+        patientId: fileInfo?.patientId || '',
+        accessionNumber: fileInfo?.accessionNumber || '',
+        seriesNumber: fileInfo?.seriesNumber || '',
+        instanceNumber: fileInfo?.instanceNumber || '',
+        studyDate: fileInfo?.studyDate || '',
+        modality: fileInfo?.modality || '',
+        success: false,
+        error: errMsg,
+      });
     }
 
     bar.increment();
@@ -246,10 +311,45 @@ export async function previewCommand(
   result.duration = Date.now() - startTime;
   result.success = result.failCount === 0;
 
+  let manifestPath: string | null = null;
+  if (!noIndex) {
+    if (indexFormat === 'json') {
+      manifestPath = path.join(outputDir, 'preview-index.json');
+      fs.writeFileSync(manifestPath, JSON.stringify(indexRecords, null, 2));
+    } else {
+      manifestPath = path.join(outputDir, 'preview-index.csv');
+      const headers = ['sourceDicomPath', 'thumbnailPath', 'patientId', 'accessionNumber', 'seriesNumber', 'instanceNumber', 'studyDate', 'modality', 'success', 'error'];
+      const lines: string[] = [headers.join(',')];
+      for (const rec of indexRecords) {
+        lines.push([
+          escapeCsvField(rec.sourceDicomPath),
+          escapeCsvField(rec.thumbnailPath),
+          escapeCsvField(rec.patientId),
+          escapeCsvField(rec.accessionNumber),
+          escapeCsvField(rec.seriesNumber),
+          escapeCsvField(rec.instanceNumber),
+          escapeCsvField(rec.studyDate),
+          escapeCsvField(rec.modality),
+          escapeCsvField(rec.success),
+          escapeCsvField(rec.error),
+        ].join(','));
+      }
+      fs.writeFileSync(manifestPath, lines.join('\n'));
+    }
+  }
+
   printReport(result);
 
   if (result.successCount > 0) {
     printSuccess(`Thumbnails saved to: ${outputDir}`);
+  }
+
+  if (!noIndex && manifestPath) {
+    const successRows = indexRecords.filter(r => r.success).length;
+    const failRows = indexRecords.filter(r => !r.success).length;
+    console.log('');
+    printSuccess(`Manifest: ${successRows} successful rows, ${failRows} failed rows`);
+    printSuccess(`Manifest saved to: ${manifestPath}`);
   }
 
   writeLog('preview', result);
