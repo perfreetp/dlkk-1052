@@ -91,20 +91,51 @@ function downsample(values: number[], srcRows: number, srcCols: number, dstRows:
   return result;
 }
 
-function writePgm(filePath: string, width: number, height: number, values: number[]): void {
-  const header = `P5\n${width} ${height}\n255\n`;
-  const headerBuf = Buffer.from(header, 'ascii');
-  const dataBuf = Buffer.alloc(values.length);
-  for (let i = 0; i < values.length; i++) {
-    dataBuf[i] = Math.max(0, Math.min(255, values[i]));
+function writeBmp(filePath: string, width: number, height: number, values: number[]): void {
+  const rowSize = Math.ceil((width * 3) / 4) * 4;
+  const pixelDataSize = rowSize * height;
+  const fileSize = 54 + pixelDataSize;
+
+  const buf = Buffer.alloc(fileSize);
+  let offset = 0;
+
+  buf.write('BM', offset, 2); offset += 2;
+  buf.writeUInt32LE(fileSize, offset); offset += 4;
+  buf.writeUInt16LE(0, offset); offset += 2;
+  buf.writeUInt16LE(0, offset); offset += 2;
+  buf.writeUInt32LE(54, offset); offset += 4;
+
+  buf.writeUInt32LE(40, offset); offset += 4;
+  buf.writeInt32LE(width, offset); offset += 4;
+  buf.writeInt32LE(height, offset); offset += 4;
+  buf.writeUInt16LE(1, offset); offset += 2;
+  buf.writeUInt16LE(24, offset); offset += 2;
+  buf.writeUInt32LE(0, offset); offset += 4;
+  buf.writeUInt32LE(pixelDataSize, offset); offset += 4;
+  buf.writeInt32LE(2835, offset); offset += 4;
+  buf.writeInt32LE(2835, offset); offset += 4;
+  buf.writeUInt32LE(0, offset); offset += 4;
+  buf.writeUInt32LE(0, offset); offset += 4;
+
+  for (let y = height - 1; y >= 0; y--) {
+    for (let x = 0; x < width; x++) {
+      const val = Math.max(0, Math.min(255, values[y * width + x]));
+      buf.writeUInt8(val, offset++);
+      buf.writeUInt8(val, offset++);
+      buf.writeUInt8(val, offset++);
+    }
+    const padding = rowSize - width * 3;
+    for (let p = 0; p < padding; p++) {
+      buf.writeUInt8(0, offset++);
+    }
   }
-  const combined = Buffer.concat([headerBuf, dataBuf]);
-  fs.writeFileSync(filePath, combined);
+
+  fs.writeFileSync(filePath, buf);
 }
 
 export async function previewCommand(
   dir: string,
-  options: { output?: string; width?: number; height?: number; format?: 'png' | 'jpg' }
+  options: { output?: string; width?: number; height?: number }
 ): Promise<ProcessResult> {
   const startTime = Date.now();
   const config = loadConfig();
@@ -126,6 +157,8 @@ export async function previewCommand(
   if (!fs.existsSync(dir)) {
     printError(`Directory not found: ${dir}`);
     result.success = false;
+    result.duration = Date.now() - startTime;
+    writeLog('preview', result);
     return result;
   }
 
@@ -143,6 +176,8 @@ export async function previewCommand(
   if (dicomFiles.length === 0) {
     printError('No DICOM files found');
     result.success = false;
+    result.duration = Date.now() - startTime;
+    writeLog('preview', result);
     return result;
   }
 
@@ -150,6 +185,7 @@ export async function previewCommand(
   result.totalProcessed = dicomFiles.length;
 
   const bar = createProgressBar(dicomFiles.length, 'Generating previews');
+  const usedNames = new Map<string, number>();
 
   for (const filePath of dicomFiles) {
     try {
@@ -159,7 +195,9 @@ export async function previewCommand(
 
       if (!pixelBuffer || !dimensions) {
         result.failCount++;
-        result.failures.push({ filePath, error: 'No pixel data or dimensions available' });
+        const msg = 'No image pixel data or dimensions available';
+        result.failures.push({ filePath, error: msg });
+        printError(`${path.basename(filePath)}: ${msg}`);
         bar.increment();
         continue;
       }
@@ -174,21 +212,30 @@ export async function previewCommand(
 
       const thumbValues = downsample(scaled, rows, columns, thumbHeight, thumbWidth);
 
-      const patientId = fileInfo.patientId || 'unknown';
+      const patientId = (fileInfo.patientId || 'unknown').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
       const studyDate = fileInfo.studyDate || 'nodate';
       const seriesNumber = fileInfo.seriesNumber || '0';
       const instanceNumber = fileInfo.instanceNumber || '0';
-      const outputName = `${patientId}_${studyDate}_${seriesNumber}_${instanceNumber}.pgm`;
-      const outputPath = path.join(outputDir, outputName);
+      let outputName = `${patientId}_${studyDate}_${seriesNumber}_${instanceNumber}.bmp`;
 
-      writePgm(outputPath, thumbWidth, thumbHeight, thumbValues);
+      const nameKey = outputName.toLowerCase();
+      if (usedNames.has(nameKey)) {
+        const cnt = usedNames.get(nameKey)! + 1;
+        usedNames.set(nameKey, cnt);
+        outputName = `${patientId}_${studyDate}_${seriesNumber}_${instanceNumber}_${cnt}.bmp`;
+      } else {
+        usedNames.set(nameKey, 0);
+      }
+
+      const outputPath = path.join(outputDir, outputName);
+      writeBmp(outputPath, thumbWidth, thumbHeight, thumbValues);
 
       result.successCount++;
       printSuccess(`Generated: ${outputName}`);
     } catch (err: any) {
       result.failCount++;
       result.failures.push({ filePath, error: err.message || 'Unknown error' });
-      printError(`Failed: ${path.basename(filePath)}`);
+      printError(`Failed: ${path.basename(filePath)} - ${err.message || 'Unknown error'}`);
     }
 
     bar.increment();
@@ -197,6 +244,7 @@ export async function previewCommand(
   bar.stop();
 
   result.duration = Date.now() - startTime;
+  result.success = result.failCount === 0;
 
   printReport(result);
 

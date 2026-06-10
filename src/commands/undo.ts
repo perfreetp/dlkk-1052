@@ -15,6 +15,8 @@ async function reverseOperation(op: UndoRecord['operations'][number]): Promise<{
       if (!fs.existsSync(op.to)) {
         return { reversed: false, detail: `File not found: ${op.to}` };
       }
+      const targetDir = path.dirname(op.from);
+      fs.ensureDirSync(targetDir);
       fs.renameSync(op.to, op.from);
       return { reversed: true, detail: `Renamed back: ${path.basename(op.to)} -> ${path.basename(op.from)}` };
     }
@@ -26,12 +28,12 @@ async function reverseOperation(op: UndoRecord['operations'][number]): Promise<{
       return { reversed: true, detail: `Removed copy: ${path.basename(op.to)}` };
     }
     case 'modify': {
-      const backupPath = op.from;
-      if (!fs.existsSync(backupPath)) {
-        return { reversed: false, detail: `Backup not found: ${backupPath}` };
+      if (op.backupPath && fs.existsSync(op.backupPath)) {
+        fs.ensureDirSync(path.dirname(op.to));
+        fs.copySync(op.backupPath, op.to, { overwrite: true });
+        return { reversed: true, detail: `Restored original from backup: ${path.basename(op.to)}` };
       }
-      fs.copySync(backupPath, op.to);
-      return { reversed: true, detail: `Restored from backup: ${path.basename(op.to)}` };
+      return { reversed: false, detail: `Backup file not found for: ${op.to}` };
     }
     case 'delete': {
       return { reversed: false, detail: `Cannot undo delete operation for: ${op.from}` };

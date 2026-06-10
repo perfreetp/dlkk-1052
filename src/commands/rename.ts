@@ -1,6 +1,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import chalk from 'chalk';
 import { isDicomFile, parseDicomFile } from '../core/parser';
 import { ProcessResult, UndoRecord } from '../core/types';
 import { loadConfig } from '../core/config';
@@ -44,6 +45,37 @@ function buildFileName(pattern: string, tags: Record<string, string>): string {
 function getFileExtension(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   return ext === '.dcm' ? '.dcm' : ext || '.dcm';
+}
+
+function resolveUniqueRenameName(
+  dirPath: string,
+  baseName: string,
+  ext: string,
+  originalPath: string,
+  usedNames: Map<string, number>
+): { newPath: string; addedSuffix: boolean } {
+  let candidateName = `${baseName}${ext}`;
+  let candidatePath = path.join(dirPath, candidateName);
+  const nameKey = candidatePath.toLowerCase();
+
+  if (!usedNames.has(nameKey) && (!fs.existsSync(candidatePath) || candidatePath.toLowerCase() === originalPath.toLowerCase())) {
+    usedNames.set(nameKey, 0);
+    return { newPath: candidatePath, addedSuffix: false };
+  }
+
+  const startCount = (usedNames.get(nameKey) ?? 0) + 1;
+  let counter = startCount;
+  while (true) {
+    candidateName = `${baseName}_${counter}${ext}`;
+    candidatePath = path.join(dirPath, candidateName);
+    const lowerCandidate = candidatePath.toLowerCase();
+    if (!usedNames.has(lowerCandidate) && (!fs.existsSync(candidatePath) || lowerCandidate === originalPath.toLowerCase())) {
+      usedNames.set(nameKey, counter);
+      usedNames.set(lowerCandidate, counter);
+      return { newPath: candidatePath, addedSuffix: true };
+    }
+    counter++;
+  }
 }
 
 export async function renameCommand(
@@ -97,6 +129,7 @@ export async function renameCommand(
   const bar = createProgressBar(dicomFiles.length, 'Renaming');
   let successCount = 0;
   let failCount = 0;
+  let autoSuffixCount = 0;
   const failures: { filePath: string; error: string }[] = [];
   const operations: UndoRecord['operations'] = [];
   const usedNames = new Map<string, number>();
@@ -127,34 +160,43 @@ export async function renameCommand(
 
       const baseName = buildFileName(pattern, tags);
       const ext = getFileExtension(filePath);
+      const dirPath = path.dirname(filePath);
 
-      let newName = `${baseName}${ext}`;
-      const nameKey = path.join(path.dirname(filePath), newName);
-      if (usedNames.has(nameKey)) {
-        const count = usedNames.get(nameKey)! + 1;
-        usedNames.set(nameKey, count);
-        newName = `${baseName}_${count}${ext}`;
-      } else {
-        usedNames.set(nameKey, 0);
-      }
+      const { newPath, addedSuffix } = resolveUniqueRenameName(dirPath, baseName, ext, filePath, usedNames);
 
-      const newFilePath = path.join(path.dirname(filePath), newName);
-
-      if (newFilePath === filePath) {
+      if (newPath.toLowerCase() === filePath.toLowerCase()) {
         bar.increment();
         successCount++;
         continue;
       }
 
+      if (fs.existsSync(newPath) && newPath.toLowerCase() !== filePath.toLowerCase()) {
+        bar.increment();
+        failCount++;
+        const msg = `目标文件已存在且非自身，已自动避让失败: ${path.basename(newPath)}`;
+        failures.push({ filePath, error: msg });
+        printWarning(`${path.basename(filePath)} -> ${msg}`);
+        continue;
+      }
+
       if (options.dryRun) {
-        console.log(`  ${path.basename(filePath)} -> ${newName}`);
+        let suffixNote = '';
+        if (addedSuffix) {
+          suffixNote = chalk.yellow(' [自动加后缀避免冲突]');
+          autoSuffixCount++;
+        }
+        console.log(`  ${path.basename(filePath)} -> ${path.basename(newPath)}${suffixNote}`);
         successCount++;
       } else {
-        fs.renameSync(filePath, newFilePath);
+        if (addedSuffix) {
+          autoSuffixCount++;
+          printWarning(`${path.basename(filePath)} 目标重名，自动改名: ${path.basename(newPath)}`);
+        }
+        fs.renameSync(filePath, newPath);
         operations.push({
           type: 'rename',
           from: filePath,
-          to: newFilePath,
+          to: newPath,
         });
         successCount++;
       }
@@ -193,6 +235,10 @@ export async function renameCommand(
   writeLog(command, result);
 
   printReport(result);
+
+  if (autoSuffixCount > 0) {
+    console.log(`  自动加后缀避免冲突: ${autoSuffixCount} 个文件`);
+  }
 
   if (result.success) {
     printSuccess(`Renamed ${successCount} file(s) successfully.`);

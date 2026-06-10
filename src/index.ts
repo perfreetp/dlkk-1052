@@ -136,19 +136,17 @@ program
 
 program
   .command('preview')
-  .description('导出 DICOM 文件缩略图')
+  .description('导出 DICOM 文件缩略图（BMP 格式）')
   .argument('<dir>', '目标目录')
   .option('-o, --output <dir>', '输出目录')
   .option('--width <pixels>', '缩略图宽度', '256')
   .option('--height <pixels>', '缩略图高度', '256')
-  .option('--format <format>', '输出格式: png 或 jpg', 'png')
   .action(async (dir: string, options: any) => {
     try {
       await previewCommand(dir, {
         output: options.output,
         width: parseInt(options.width, 10),
         height: parseInt(options.height, 10),
-        format: options.format,
       });
     } catch (err: any) {
       console.error(`错误: ${err.message}`);

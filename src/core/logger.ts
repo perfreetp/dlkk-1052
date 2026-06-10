@@ -44,6 +44,13 @@ export function saveUndoRecord(record: UndoRecord): void {
   fs.writeJsonSync(undoFile, record, { spaces: 2 });
 }
 
+export function ensureBackupDir(recordId: string): string {
+  const undoDir = ensureUndoDir();
+  const backupDir = path.join(undoDir, `backup-${recordId}`);
+  fs.ensureDirSync(backupDir);
+  return backupDir;
+}
+
 export function getLatestUndoRecord(): UndoRecord | null {
   const undoDir = ensureUndoDir();
   if (!fs.existsSync(undoDir)) return null;
@@ -60,8 +67,12 @@ export function getLatestUndoRecord(): UndoRecord | null {
 export function removeUndoRecord(id: string): void {
   const undoDir = ensureUndoDir();
   const undoFile = path.join(undoDir, `${id}.json`);
+  const backupDir = path.join(undoDir, `backup-${id}`);
   if (fs.existsSync(undoFile)) {
     fs.removeSync(undoFile);
+  }
+  if (fs.existsSync(backupDir)) {
+    fs.removeSync(backupDir);
   }
 }
 

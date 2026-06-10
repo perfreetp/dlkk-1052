@@ -26,6 +26,21 @@ function walkDir(dir: string): string[] {
   return files;
 }
 
+function resolveUniquePath(desiredPath: string, usedPaths: Set<string>): string {
+  if (!usedPaths.has(desiredPath) && !fs.existsSync(desiredPath)) {
+    return desiredPath;
+  }
+  const ext = path.extname(desiredPath);
+  const base = path.join(path.dirname(desiredPath), path.basename(desiredPath, ext));
+  let counter = 1;
+  let candidate = `${base}_${counter}${ext}`;
+  while (usedPaths.has(candidate) || fs.existsSync(candidate)) {
+    counter++;
+    candidate = `${base}_${counter}${ext}`;
+  }
+  return candidate;
+}
+
 export async function mergeCommand(
   sources: string[],
   options: { output: string; byStudy?: boolean }
@@ -44,7 +59,9 @@ export async function mergeCommand(
 
   const operations: UndoRecord['operations'] = [];
   const seenSopUids = new Set<string>();
-  let duplicatesSkipped = 0;
+  const usedDestPaths = new Set<string>();
+  let duplicateSopSkipped = 0;
+  let nameCollisionRenamed = 0;
 
   printHeader('DICOM Merge');
 
@@ -52,7 +69,6 @@ export async function mergeCommand(
     if (!fs.existsSync(source)) {
       printError(`Source directory not found: ${source}`);
       result.failures.push({ filePath: source, error: 'Directory not found' });
-      continue;
     }
   }
 
@@ -76,8 +92,10 @@ export async function mergeCommand(
   }
 
   const bar = createProgressBar(allDicomFiles.length, 'Merging');
+  await fs.ensureDir(options.output);
 
   for (const { filePath, sourceDir } of allDicomFiles) {
+    result.totalProcessed++;
     try {
       const fileInfo = parseDicomFile(filePath);
 
@@ -89,8 +107,8 @@ export async function mergeCommand(
       }
 
       if (fileInfo.sopInstanceUid && seenSopUids.has(fileInfo.sopInstanceUid)) {
-        duplicatesSkipped++;
-        printWarning(`Duplicate SOPInstanceUID skipped: ${fileInfo.sopInstanceUid}`);
+        duplicateSopSkipped++;
+        printWarning(`Duplicate SOPInstanceUID skipped (same instance): ${path.basename(filePath)}`);
         bar.increment();
         continue;
       }
@@ -109,36 +127,47 @@ export async function mergeCommand(
 
       await fs.ensureDir(destDir);
 
-      const destPath = path.join(destDir, path.basename(filePath));
-      await fs.copy(filePath, destPath, { overwrite: false });
+      const origFileName = path.basename(filePath);
+      const desiredDestPath = path.join(destDir, origFileName);
+      const finalDestPath = resolveUniquePath(desiredDestPath, usedDestPaths);
 
-      operations.push({ type: 'copy', from: filePath, to: destPath });
+      if (finalDestPath !== desiredDestPath) {
+        nameCollisionRenamed++;
+        printWarning(`文件名冲突但为不同实例，自动改名: ${path.basename(desiredDestPath)} -> ${path.basename(finalDestPath)}`);
+      }
+
+      usedDestPaths.add(finalDestPath);
+      await fs.copy(filePath, finalDestPath, { overwrite: false });
+
+      operations.push({ type: 'copy', from: filePath, to: finalDestPath });
       result.successCount++;
     } catch (err: any) {
       result.failCount++;
       result.failures.push({ filePath, error: err.message || 'Unknown error' });
     }
 
-    result.totalProcessed++;
     bar.increment();
   }
 
   bar.stop();
 
-  const undoRecord: UndoRecord = {
-    id: `merge-${Date.now()}`,
-    timestamp: new Date().toISOString(),
-    command: 'merge',
-    operations,
-  };
-  saveUndoRecord(undoRecord);
+  if (operations.length > 0) {
+    const undoRecord: UndoRecord = {
+      id: `merge-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      command: 'merge',
+      operations,
+    };
+    saveUndoRecord(undoRecord);
+  }
 
   result.duration = Date.now() - startTime;
   result.success = result.failCount === 0;
 
   printReport(result);
 
-  console.log(`  Duplicates skipped: ${duplicatesSkipped}`);
+  console.log(`  同一实例(SOP)重复跳过: ${duplicateSopSkipped}`);
+  console.log(`  文件名冲突自动改名保留: ${nameCollisionRenamed}`);
 
   if (options.byStudy) {
     const studyDirs = new Set(operations.map(op => path.dirname(op.to)));

@@ -96,7 +96,12 @@ export interface UndoRecord {
   id: string;
   timestamp: string;
   command: string;
-  operations: { type: 'rename' | 'copy' | 'modify' | 'delete'; from: string; to: string }[];
+  operations: {
+    type: 'rename' | 'copy' | 'modify' | 'delete';
+    from: string;
+    to: string;
+    backupPath?: string;
+  }[];
 }
 
 export interface AppConfig {
@@ -106,7 +111,6 @@ export interface AppConfig {
   logDir: string;
   undoDir: string;
   previewSize: { width: number; height: number };
-  previewFormat: 'png' | 'jpg';
 }
 
 export interface CompareResult {

@@ -1,7 +1,7 @@
 import { isDicomFile, parseDicomFile } from '../core/parser';
 import { AnonymizeRule, ProcessResult, UndoRecord } from '../core/types';
 import { getAnonymizeRules } from '../core/config';
-import { writeLog, saveUndoRecord } from '../core/logger';
+import { writeLog, saveUndoRecord, ensureBackupDir } from '../core/logger';
 import { createProgressBar, printSuccess, printError, printReport, printHeader, printWarning } from '../utils/display';
 import * as fs from 'fs-extra';
 import * as path from 'path';
@@ -107,6 +107,7 @@ export async function anonymizeCommand(
 
   const inputDir = path.resolve(dir);
   const outputDir = options.output ? path.resolve(options.output) : inputDir;
+  const isInPlace = inputDir === outputDir;
 
   if (!fs.existsSync(inputDir)) {
     printError(`Directory not found: ${inputDir}`);
@@ -143,11 +144,18 @@ export async function anonymizeCommand(
     printWarning('DRY RUN MODE - No files will be modified\n');
   }
 
+  const recordId = crypto.randomUUID();
+  let backupDir: string | null = null;
+  if (!options.dryRun && isInPlace) {
+    backupDir = ensureBackupDir(recordId);
+  }
+
   const bar = createProgressBar(dicomFiles.length, 'Anonymizing');
   let successCount = 0;
   let failCount = 0;
   const failures: { filePath: string; error: string }[] = [];
   const operations: UndoRecord['operations'] = [];
+  let backupCounter = 0;
 
   for (const filePath of dicomFiles) {
     try {
@@ -209,18 +217,35 @@ export async function anonymizeCommand(
         }
         successCount++;
       } else if (modified) {
-        const relativePath = path.relative(inputDir, filePath);
-        const outputPath = path.join(outputDir, relativePath);
+        if (isInPlace && backupDir) {
+          backupCounter++;
+          const backupName = `${backupCounter.toString().padStart(6, '0')}_${crypto.createHash('md5').update(filePath).digest('hex')}.bak`;
+          const backupPath = path.join(backupDir, backupName);
+          fs.copyFileSync(filePath, backupPath);
 
-        fs.ensureDirSync(path.dirname(outputPath));
-        fs.writeFileSync(outputPath, rawBuffer);
+          const relativePath = path.relative(inputDir, filePath);
+          const outputPath = path.join(outputDir, relativePath);
+          fs.ensureDirSync(path.dirname(outputPath));
+          fs.writeFileSync(outputPath, rawBuffer);
 
-        const opType = inputDir === outputDir ? 'modify' : 'copy';
-        operations.push({
-          type: opType,
-          from: filePath,
-          to: outputPath,
-        });
+          operations.push({
+            type: 'modify',
+            from: filePath,
+            to: outputPath,
+            backupPath,
+          });
+        } else {
+          const relativePath = path.relative(inputDir, filePath);
+          const outputPath = path.join(outputDir, relativePath);
+          fs.ensureDirSync(path.dirname(outputPath));
+          fs.writeFileSync(outputPath, rawBuffer);
+
+          operations.push({
+            type: 'copy',
+            from: filePath,
+            to: outputPath,
+          });
+        }
 
         successCount++;
       } else {
@@ -239,7 +264,7 @@ export async function anonymizeCommand(
 
   if (!options.dryRun && operations.length > 0) {
     const undoRecord: UndoRecord = {
-      id: crypto.randomUUID(),
+      id: recordId,
       timestamp: new Date().toISOString(),
       command,
       operations,

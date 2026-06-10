@@ -46,7 +46,6 @@ const DEFAULT_CONFIG: AppConfig = {
   logDir: './dicom-tools-logs',
   undoDir: './dicom-tools-undo',
   previewSize: { width: 256, height: 256 },
-  previewFormat: 'png',
 };
 
 let configCache: AppConfig | null = null;
