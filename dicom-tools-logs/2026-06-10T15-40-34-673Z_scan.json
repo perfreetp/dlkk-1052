@@ -1,0 +1,13 @@
+{
+  "command": "scan",
+  "result": {
+    "success": true,
+    "totalProcessed": 2077,
+    "successCount": 0,
+    "failCount": 0,
+    "failures": [],
+    "duration": 0,
+    "timestamp": "2026-06-10T15:40:34.672Z",
+    "command": "scan"
+  }
+}

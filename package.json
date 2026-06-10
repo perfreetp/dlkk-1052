@@ -1,0 +1,33 @@
+{
+  "name": "dicom-tools",
+  "version": "1.0.0",
+  "description": "DICOM文件批处理命令行工具 - 影像科工程师交接、脱敏和归档前使用",
+  "main": "dist/index.js",
+  "bin": {
+    "dicom-tools": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint src/**/*.ts"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "cli-progress": "^3.12.0",
+    "commander": "^12.0.0",
+    "dicom-parser": "^1.8.21",
+    "fs-extra": "^11.2.0",
+    "glob": "^10.3.10",
+    "ora": "^5.4.1",
+    "table": "^6.8.1"
+  },
+  "devDependencies": {
+    "@types/cli-progress": "^3.11.5",
+    "@types/fs-extra": "^11.0.4",
+    "@types/glob": "^8.1.0",
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
