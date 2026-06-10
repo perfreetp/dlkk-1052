@@ -3,7 +3,7 @@ import * as path from 'path';
 import { isDicomFile, parseDicomFile } from '../core/parser';
 import { DicomFileInfo, ProcessResult } from '../core/types';
 import { writeLog } from '../core/logger';
-import { createProgressBar, printSuccess, printError, printReport, printHeader } from '../utils/display';
+import { createProgressBar, printSuccess, printError, printReport, printHeader, printWarning } from '../utils/display';
 
 const DEFAULT_FIELDS = [
   'patientId',
@@ -148,7 +148,13 @@ export async function exportCommand(
     fs.writeJsonSync(resolvedOutput, records, { spaces: 2 });
   }
 
-  printSuccess(`Exported ${records.length} record(s) to ${resolvedOutput}`);
+  const success = failCount === 0;
+
+  if (success) {
+    printSuccess(`Exported ${records.length} record(s) to ${resolvedOutput}`);
+  } else {
+    printWarning(`Exported ${records.length} record(s) with ${failCount} failure(s) to ${resolvedOutput}`);
+  }
 
   printReport({
     successCount,
@@ -157,19 +163,8 @@ export async function exportCommand(
     duration: Date.now() - startTime,
   });
 
-  writeLog('export', {
-    success: true,
-    totalProcessed: allFiles.length,
-    successCount,
-    failCount,
-    failures,
-    duration: Date.now() - startTime,
-    timestamp: new Date().toISOString(),
-    command: 'export',
-  });
-
-  return {
-    success: true,
+  const result: ProcessResult = {
+    success,
     totalProcessed: allFiles.length,
     successCount,
     failCount,
@@ -178,4 +173,7 @@ export async function exportCommand(
     timestamp: new Date().toISOString(),
     command: 'export',
   };
+
+  writeLog('export', result);
+  return result;
 }

@@ -2,7 +2,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import chalk from 'chalk';
-import { ProcessResult, BatchResult, BatchStepResult, BatchStepConfig, BatchConfig, UndoRecord, ScanResult } from '../core/types';
+import { ProcessResult, BatchResult, BatchStepResult, BatchStepConfig, BatchConfig, UndoRecord, ScanResult, BatchStatus } from '../core/types';
 import { writeLog, writeBatchLog, saveUndoRecord, ensureBackupDir, listUndoRecords, ensureUndoDir, findBatchById, removeUndoRecord } from '../core/logger';
 import { scanCommand } from './scan';
 import { validateCommand } from './validate';
@@ -12,7 +12,9 @@ import { previewCommand } from './preview';
 import { exportCommand } from './export';
 import { printHeader, printSection, printSuccess, printError, printWarning, printReport, printTable, createSpinner } from '../utils/display';
 
-const OUTPUT_PRODUCING_STEPS = new Set(['anonymize', 'preview', 'export', 'split', 'filter', 'copy']);
+const DICOM_OUTPUT_STEPS = new Set(['anonymize', 'split', 'filter', 'copy', 'merge', 'rename']);
+const AUX_OUTPUT_STEPS = new Set(['preview', 'export']);
+const ALL_OUTPUT_STEPS = new Set([...DICOM_OUTPUT_STEPS, ...AUX_OUTPUT_STEPS]);
 
 function resolveStepWorkDir(step: BatchStepConfig, currentWorkDir: string, batchWorkDir: string | null): { inputDir: string; outputDir: string | null; nextWorkDir: string } {
   const stepOpts = step.options || {};
@@ -20,7 +22,7 @@ function resolveStepWorkDir(step: BatchStepConfig, currentWorkDir: string, batch
   const outputDir = stepOpts.output || null;
   let nextWorkDir = currentWorkDir;
 
-  if (outputDir && OUTPUT_PRODUCING_STEPS.has(step.name)) {
+  if (outputDir && DICOM_OUTPUT_STEPS.has(step.name)) {
     nextWorkDir = outputDir;
   }
 
@@ -42,7 +44,7 @@ export async function batchCommand(
     printError(`Config file not found: ${resolvedConfigPath}`);
     const failedResult: BatchResult = {
       batchId: 'unknown', name: 'unknown', timestamp, inputDir: '',
-      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, steps: [], duration: Date.now() - startTime,
+      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, status: 'failed', steps: [], duration: Date.now() - startTime,
     };
     writeBatchLog(failedResult);
     return failedResult;
@@ -55,7 +57,7 @@ export async function batchCommand(
     printError(`Failed to parse config file: ${err.message || 'Invalid JSON'}`);
     const failedResult: BatchResult = {
       batchId: 'unknown', name: 'unknown', timestamp, inputDir: '',
-      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, steps: [], duration: Date.now() - startTime,
+      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, status: 'failed', steps: [], duration: Date.now() - startTime,
     };
     writeBatchLog(failedResult);
     return failedResult;
@@ -65,7 +67,7 @@ export async function batchCommand(
     printError('Config validation failed: inputDir is required');
     const failedResult: BatchResult = {
       batchId: 'unknown', name: config.name || 'unknown', timestamp, inputDir: '',
-      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, steps: [], duration: Date.now() - startTime,
+      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, status: 'failed', steps: [], duration: Date.now() - startTime,
     };
     writeBatchLog(failedResult);
     return failedResult;
@@ -75,7 +77,7 @@ export async function batchCommand(
     printError('Config validation failed: steps array is required');
     const failedResult: BatchResult = {
       batchId: 'unknown', name: config.name || 'unknown', timestamp, inputDir: config.inputDir,
-      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, steps: [], duration: Date.now() - startTime,
+      totalSteps: 0, completedSteps: 0, failedAtStep: 0, overallSuccess: false, status: 'failed', steps: [], duration: Date.now() - startTime,
     };
     writeBatchLog(failedResult);
     return failedResult;
@@ -96,7 +98,7 @@ export async function batchCommand(
       printError(`Batch ${batchId} not found. Cannot resume.`);
       const failedResult: BatchResult = {
         batchId, name: config.name || 'unknown', timestamp, inputDir: config.inputDir,
-        totalSteps, completedSteps: 0, failedAtStep: 0, overallSuccess: false, steps: [], duration: Date.now() - startTime,
+        totalSteps, completedSteps: 0, failedAtStep: 0, overallSuccess: false, status: 'failed', steps: [], duration: Date.now() - startTime,
       };
       writeBatchLog(failedResult);
       return failedResult;
@@ -149,6 +151,16 @@ export async function batchCommand(
   const allOperations: UndoRecord['operations'] = [];
   const stepUndoRecordIds: string[] = [];
 
+  if (options.resume) {
+    const existingBatchUndo = listUndoRecords().find(r => r.id === batchId);
+    if (existingBatchUndo) {
+      for (const op of existingBatchUndo.operations) {
+        allOperations.push(op);
+      }
+      stepUndoRecordIds.push(existingBatchUndo.id);
+    }
+  }
+
   for (const prevRecord of listUndoRecords()) {
     if (!existingUndoIds.has(prevRecord.id)) {
       existingUndoIds.add(prevRecord.id);
@@ -183,7 +195,7 @@ export async function batchCommand(
       dryRun: options.dryRun,
     };
 
-    if (stepOutputDir && OUTPUT_PRODUCING_STEPS.has(step.name)) {
+    if (stepOutputDir && ALL_OUTPUT_STEPS.has(step.name)) {
       mergedOptions.output = stepOutputDir;
     }
 
@@ -319,7 +331,17 @@ export async function batchCommand(
   };
   saveUndoRecord(unifiedUndoRecord);
 
-  const overallSuccess = failedAtStep === null;
+  const allStepsSucceeded = stepResults.every(sr => sr.success);
+  const overallSuccess = allStepsSucceeded;
+  const hasAnyFailure = stepResults.some(sr => !sr.success);
+  let overallStatus: BatchStatus;
+  if (allStepsSucceeded) {
+    overallStatus = 'success';
+  } else if (hasAnyFailure && failedAtStep === null) {
+    overallStatus = 'partial';
+  } else {
+    overallStatus = 'failed';
+  }
   const batchResult: BatchResult = {
     batchId,
     name: config.name || 'Unnamed',
@@ -329,6 +351,7 @@ export async function batchCommand(
     completedSteps,
     failedAtStep,
     overallSuccess,
+    status: overallStatus,
     steps: stepResults,
     duration: Date.now() - startTime,
   };
@@ -352,7 +375,13 @@ export async function batchCommand(
   console.log(`  Total Duration: ${chalk.bold(`${batchResult.duration}ms`)}`);
   console.log(`  Completed: ${chalk.bold(String(completedSteps))}/${chalk.bold(String(totalSteps))}`);
 
-  if (!overallSuccess) {
+  if (overallStatus === 'success') {
+    printSuccess('Batch completed successfully!');
+  } else if (overallStatus === 'partial') {
+    const failedSteps = stepResults.filter(sr => !sr.success);
+    printWarning(`Batch completed with partial failures (${failedSteps.length} step(s) failed, continue-on-failure applied)`);
+    console.log(`  ${chalk.yellow('Tip:')} Resume with: dicom-tools batch ${configFile} --resume ${batchId}`);
+  } else {
     const failedStep = stepResults.find(sr => !sr.success);
     if (failedStep) {
       printError(`Batch failed at step ${failedAtStep! + 1}: ${failedStep.name}`);
@@ -361,8 +390,6 @@ export async function batchCommand(
       }
       console.log(`\n  ${chalk.yellow('Tip:')} Resume with: dicom-tools batch ${configFile} --resume ${batchId}`);
     }
-  } else {
-    printSuccess('Batch completed successfully!');
   }
 
   return batchResult;

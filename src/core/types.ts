@@ -134,6 +134,8 @@ export interface BatchStepResult {
   outputDir?: string;
 }
 
+export type BatchStatus = 'success' | 'partial' | 'failed';
+
 export interface BatchResult {
   batchId: string;
   name: string;
@@ -143,6 +145,7 @@ export interface BatchResult {
   completedSteps: number;
   failedAtStep: number | null;
   overallSuccess: boolean;
+  status: BatchStatus;
   steps: BatchStepResult[];
   duration: number;
 }

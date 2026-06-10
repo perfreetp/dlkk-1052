@@ -1,7 +1,7 @@
 import * as path from 'path';
 import chalk from 'chalk';
 import { getLogFiles, readLog, getBatchLogFiles, getBatchStepLogs, findBatchById } from '../core/logger';
-import { printHeader, printSection, printSuccess, printError, printTable } from '../utils/display';
+import { printHeader, printSection, printSuccess, printError, printTable, printWarning } from '../utils/display';
 
 export async function logCommand(options: { limit?: number; command?: string; detail?: boolean; batchId?: string }): Promise<void> {
   if (options.batchId) {
@@ -18,7 +18,16 @@ export async function logCommand(options: { limit?: number; command?: string; de
     console.log(`  ${chalk.bold('Input Dir:')}  ${br.inputDir}`);
     console.log(`  ${chalk.bold('Timestamp:')}  ${br.timestamp}`);
     console.log(`  ${chalk.bold('Duration:')}   ${br.duration}ms`);
-    console.log(`  ${chalk.bold('Status:')}     ${br.overallSuccess ? chalk.green('SUCCESS') : chalk.red('FAILED')}`);
+
+    let statusLabel: string;
+    if (br.status === 'success') {
+      statusLabel = chalk.green('SUCCESS');
+    } else if (br.status === 'partial') {
+      statusLabel = chalk.yellow('PARTIAL FAILURE');
+    } else {
+      statusLabel = chalk.red('FAILED');
+    }
+    console.log(`  ${chalk.bold('Status:')}     ${statusLabel}`);
 
     if (options.detail) {
       for (const step of br.steps) {
@@ -57,8 +66,10 @@ export async function logCommand(options: { limit?: number; command?: string; de
     }
 
     console.log();
-    if (br.overallSuccess) {
+    if (br.status === 'success') {
       printSuccess(`Batch ${chalk.yellow(br.batchId)} completed successfully`);
+    } else if (br.status === 'partial') {
+      printWarning(`Batch ${chalk.yellow(br.batchId)} completed with partial failures`);
     } else {
       printError(`Batch ${chalk.yellow(br.batchId)} failed`);
     }
